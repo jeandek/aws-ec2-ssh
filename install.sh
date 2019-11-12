@@ -2,7 +2,7 @@
 
 show_help() {
 cat << EOF
-Usage: ${0##*/} [-hv] [-a ARN] [-i GROUP,GROUP,...] [-l GROUP,GROUP,...] [-s GROUP] [-p PROGRAM] [-u "ARGUMENTS"] [-r RELEASE]
+Usage: ${0##*/} [-hv] [-a ARN] [-i GROUP,GROUP,...] [-l GROUP,GROUP,...] [-s GROUP] [-p PROGRAM] [-u "ARGUMENTS"] [-r RELEASE] [-n]
 Install import_users.sh and authorized_key_commands.
 
     -h                 display this help and exit
@@ -26,6 +26,9 @@ Install import_users.sh and authorized_key_commands.
     -r release         Specify a release of aws-ec2-ssh to download from GitHub. This argument is
                        passed to \`git clone -b\` and so works with branches and tags.
                        Defaults to 'master'
+    -n                 Do not make changes to the sshd configuration. SSH keys will not be fetched
+                       from IAM when a login is attempted.
+                       Compatible with AWS EC2 Instance Connect.
 
 
 EOF
@@ -43,8 +46,9 @@ ASSUME_ROLE=""
 USERADD_PROGRAM=""
 USERADD_ARGS=""
 RELEASE="master"
+SKIP_SSHD=false
 
-while getopts :hva:i:l:s:p:u:r: opt
+while getopts :hva:i:l:s:p:u:r:n opt
 do
     case $opt in
         h)
@@ -74,6 +78,9 @@ do
             ;;
         r)
             RELEASE="$OPTARG"
+            ;;
+        i)
+            SKIP_SSHD=true
             ;;
         \?)
             echo "Invalid option: -$OPTARG" >&2
@@ -110,11 +117,10 @@ tmpdir=$(mktemp -d)
 
 cd "$tmpdir"
 
-git clone -b "$RELEASE" https://github.com/widdix/aws-ec2-ssh.git
+git clone -b "$RELEASE" https://github.com/jeandek/aws-ec2-ssh.git
 
 cd "$tmpdir/aws-ec2-ssh"
 
-cp authorized_keys_command.sh $AUTHORIZED_KEYS_COMMAND_FILE
 cp import_users.sh $IMPORT_USERS_SCRIPT_FILE
 
 if [ "${IAM_GROUPS}" != "" ]
@@ -147,9 +153,15 @@ then
     echo "USERADD_ARGS=\"${USERADD_ARGS}\"" >> $MAIN_CONFIG_FILE
 fi
 
-./install_configure_selinux.sh
+if [ "${SKIP_SSHD}" = false ] ; then
+    cp authorized_keys_command.sh $AUTHORIZED_KEYS_COMMAND_FILE
 
-./install_configure_sshd.sh
+    ./install_configure_selinux.sh
+
+    ./install_configure_sshd.sh
+
+    ./install_restart_sshd.sh
+fi
 
 cat > /etc/cron.d/import_users << EOF
 SHELL=/bin/bash
@@ -161,5 +173,3 @@ EOF
 chmod 0644 /etc/cron.d/import_users
 
 $IMPORT_USERS_SCRIPT_FILE
-
-./install_restart_sshd.sh
